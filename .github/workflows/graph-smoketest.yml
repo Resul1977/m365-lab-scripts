@@ -1,0 +1,46 @@
+name: Graph smoke test (client secret)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get app-only token
+        id: token
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOKEN_JSON=$(curl -sS -X POST \
+            "https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/oauth2/v2.0/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
+            -d "client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
+            -d "grant_type=client_credentials" \
+            -d "scope=https%3A%2F%2Fgraph.microsoft.com%2F.default")
+
+          ACCESS_TOKEN=$(python3 - <<'PY'
+import json, sys
+data=json.loads(sys.stdin.read())
+print(data.get("access_token",""))
+PY
+          <<< "$TOKEN_JSON")
+
+          if [ -z "$ACCESS_TOKEN" ]; then
+            echo "Token response:"
+            echo "$TOKEN_JSON"
+            exit 1
+          fi
+
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> $GITHUB_ENV
+
+      - name: Call Microsoft Graph (list 1 user)
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sS "https://graph.microsoft.com/v1.0/users?\$top=1&\$select=id,displayName,userPrincipalName" \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Accept: application/json" | python3 -m json.tool
