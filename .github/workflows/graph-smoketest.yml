@@ -22,12 +22,7 @@ jobs:
             --data-urlencode "grant_type=client_credentials" \
             --data-urlencode "scope=https://graph.microsoft.com/.default")"
 
-          TOKEN="$(python3 - <<'PY'
-          import json,sys
-          d=json.load(sys.stdin)
-          print(d.get("access_token",""))
-          PY
-          <<<"$TOKEN_RESP")"
+          TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' <<<"$TOKEN_RESP")"
 
           if [ -z "$TOKEN" ]; then
             echo "❌ No access_token in token response"
