@@ -2,6 +2,9 @@ name: Graph smoke test (client secret)
 
 on:
   workflow_dispatch:
+  schedule:
+    # 06:00 UTC = 07:00 CET (Winterzeit)
+    - cron: "0 6 * * 1"
 
 jobs:
   test:
@@ -12,23 +15,47 @@ jobs:
         run: |
           set -euo pipefail
 
-          resp=$(curl -sS -X POST "https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/oauth2/v2.0/token" \
+          TOKEN_RESP="$(curl -sS -X POST "https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/oauth2/v2.0/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
             --data-urlencode "client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
             --data-urlencode "grant_type=client_credentials" \
-            --data-urlencode "scope=https://graph.microsoft.com/.default")
+            --data-urlencode "scope=https://graph.microsoft.com/.default")"
 
-          token=$(python3 -c 'import sys,json; print(json.load(sys.stdin).get("access_token",""))' <<<"$resp")
+          TOKEN="$(python3 - <<'PY'
+          import json,sys
+          d=json.load(sys.stdin)
+          print(d.get("access_token",""))
+          PY
+          <<<"$TOKEN_RESP")"
 
-          if [ -z "$token" ]; then
-            echo "No access_token in response:"
-            echo "$resp"
+          if [ -z "$TOKEN" ]; then
+            echo "❌ No access_token in token response"
+            echo "$TOKEN_RESP" | python3 -m json.tool || true
             exit 1
           fi
 
-          echo "::add-mask::$token"
+          echo "::add-mask::$TOKEN"
 
-          curl -sS "https://graph.microsoft.com/v1.0/users?\$top=1&\$select=id,displayName,userPrincipalName" \
-            -H "Authorization: Bearer $token" \
-            -H "Accept: application/json" | python3 -m json.tool
+          # Graph call + capture HTTP status
+          RESP_WITH_STATUS="$(curl -sS -w "\n%{http_code}" \
+            "https://graph.microsoft.com/v1.0/users?\$top=1&\$select=id,displayName,userPrincipalName" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/json")"
+
+          BODY="$(echo "$RESP_WITH_STATUS" | sed '$d')"
+          STATUS="$(echo "$RESP_WITH_STATUS" | tail -n 1)"
+
+          echo "$BODY" | python3 -m json.tool || true
+
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Graph call failed with HTTP $STATUS"
+            exit 1
+          fi
+
+          # Nice summary in the Actions UI
+          echo "### Graph smoke test ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Token: OK" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Endpoint: /v1.0/users?\$top=1" >> "$GITHUB_STEP_SUMMARY"
+          echo "- HTTP: $STATUS" >> "$GITHUB_STEP_SUMMARY"
